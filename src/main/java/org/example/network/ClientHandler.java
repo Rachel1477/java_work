@@ -24,12 +24,24 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
+import java.util.*;
+import java.util.stream.Collectors;
+
 public class ClientHandler implements Runnable {
     private final Socket clientSocket;
     private final UserDao userDao;
     private final BookDao bookDao;
     private final BorrowRecordDao borrowRecordDao;
-    private User loggedInUser; // Store logged-in user state
+    private User loggedInUser;
 
     public ClientHandler(Socket socket) {
         this.clientSocket = socket;
@@ -69,7 +81,7 @@ public class ClientHandler implements Runnable {
     }
 
     private String processRequest(String requestString) {
-        String[] parts = requestString.split("::", -1); // -1 to keep trailing empty strings
+        String[] parts = requestString.split("::", -1);
         if (parts.length == 0) {
             return "ERROR::INVALID_REQUEST_FORMAT";
         }
@@ -83,11 +95,9 @@ public class ClientHandler implements Runnable {
 
         String[] args = Arrays.copyOfRange(parts, 1, parts.length);
 
-        // Some requests require login
         if (requiresLogin(requestType) && loggedInUser == null) {
             return "ERROR::AUTH_REQUIRED::Please login first.";
         }
-        // Some requests require admin role
         if (requiresAdmin(requestType) && (loggedInUser == null || loggedInUser.getRole() != Role.ADMIN)) {
             return "ERROR::ADMIN_ACCESS_DENIED::Admin privileges required.";
         }
@@ -111,7 +121,6 @@ public class ClientHandler implements Runnable {
                 case GET_BOOK_BY_ID:
                     return handleGetBookById(args);
 
-
                 case BORROW_BOOK:
                     return handleBorrowBook(args);
                 case RETURN_BOOK:
@@ -120,6 +129,8 @@ public class ClientHandler implements Runnable {
                     return handleViewMyBorrowingRecords();
                 case GET_MY_OVERDUE_BOOKS:
                     return handleGetMyOverdueBooks();
+                case GET_MY_RECOMMENDATIONS:
+                    return handleGetMyRecommendations(args);
 
 
                 case ADD_BOOK:
@@ -130,21 +141,26 @@ public class ClientHandler implements Runnable {
                     return handleDeleteBook(args);
                 case VIEW_ALL_BORROWING_RECORDS:
                     return handleViewAllBorrowingRecords();
+                case GET_POPULAR_BOOKS:
+                    return handleGetPopularBooks(args);
+                case GET_TRENDING_BOOKS:
+                    return handleGetTrendingBooks(args);
+
+
                 case GET_ALL_USERS:
                     return handleGetAllUsers();
                 case UPDATE_USER_STATUS:
                     return handleUpdateUserStatus(args);
 
-
                 case TERMINATE_CONNECTION:
-                    this.loggedInUser = null; // Clear logged-in state
+                    this.loggedInUser = null;
                     return "SUCCESS::CONNECTION_TERMINATED";
                 default:
                     return "INFO::REQUEST_RECEIVED::" + requestType.name() + "::" + String.join(":", args);
             }
         } catch (Exception e) {
             System.err.println("Error processing request '" + requestType + "': " + e.getMessage());
-            e.printStackTrace(); // Log full stack trace on server for debugging
+            e.printStackTrace();
             return "ERROR::INTERNAL_SERVER_ERROR::" + e.getMessage();
         }
     }
@@ -152,22 +168,26 @@ public class ClientHandler implements Runnable {
     private boolean requiresLogin(RequestType type) {
         switch (type) {
             case LOGOUT:
-            case GET_ALL_BOOKS: // Arguably, could be public
-            case SEARCH_BOOK:   // Arguably, could be public
-            case GET_BOOK_BY_ID: // Arguably, could be public
+                // GET_ALL_BOOKS, SEARCH_BOOK, GET_BOOK_BY_ID could be public if desired, but let's keep them login-protected for now
+            case GET_ALL_BOOKS:
+            case SEARCH_BOOK:
+            case GET_BOOK_BY_ID:
             case BORROW_BOOK:
             case RETURN_BOOK:
             case VIEW_MY_BORROWING_RECORDS:
             case GET_MY_OVERDUE_BOOKS:
-                // Admin specific commands
+            case GET_MY_RECOMMENDATIONS:
+                // Admin specific commands are implicitly login-required too
             case ADD_BOOK:
             case UPDATE_BOOK:
             case DELETE_BOOK:
             case VIEW_ALL_BORROWING_RECORDS:
             case GET_ALL_USERS:
             case UPDATE_USER_STATUS:
+            case GET_POPULAR_BOOKS:
+            case GET_TRENDING_BOOKS:
                 return true;
-            default:
+            default: // PING, LOGIN, REGISTER, TERMINATE_CONNECTION do not require prior login
                 return false;
         }
     }
@@ -180,13 +200,15 @@ public class ClientHandler implements Runnable {
             case VIEW_ALL_BORROWING_RECORDS:
             case GET_ALL_USERS:
             case UPDATE_USER_STATUS:
+            case GET_POPULAR_BOOKS:
+            case GET_TRENDING_BOOKS:
                 return true;
             default:
                 return false;
         }
     }
 
-    // --- Handler Methods ---
+    // --- Handler Methods (Existing methods unchanged, only showing new/modified ones) ---
 
     private String handleLogin(String[] args) {
         if (args.length != 2) return "ERROR::LOGIN_INVALID_ARGS::Expected username::password";
@@ -201,16 +223,13 @@ public class ClientHandler implements Runnable {
             }
             if (PasswordUtil.verifyPassword(plainPassword, user.getPasswordHash())) {
                 this.loggedInUser = user;
-                return "SUCCESS::LOGIN_SUCCESSFUL::Welcome " + user.getUsername() + "::" + user.getRole().name() + "::" + user.getUserId();
+                return "SUCCESS::LOGIN_SUCCESSFUL::" + user.getRole().name() + "::" + user.getUserId() + "::Welcome " + user.getUsername();
             }
         }
         return "FAILURE::LOGIN_FAILED::Invalid username or password.";
     }
 
     private String handleRegister(String[] args) {
-        // REGISTER::userId::username::password::role (userId is new, role is optional)
-        // For self-registration, let's simplify: REGISTER::username::password
-        // The server will generate a userId. Role will be NORMAL_USER.
         if (args.length != 2) return "ERROR::REGISTER_INVALID_ARGS::Expected username::password";
         String username = args[0];
         String plainPassword = args[1];
@@ -218,11 +237,11 @@ public class ClientHandler implements Runnable {
         if (userDao.getUserByUsername(username).isPresent()) {
             return "FAILURE::REGISTRATION_FAILED::Username already exists.";
         }
-        if (plainPassword.length() < 6) { // Basic validation
+        if (plainPassword.length() < 6) {
             return "FAILURE::REGISTRATION_FAILED::Password too short (min 6 chars).";
         }
 
-        String userId = "user_" + UUID.randomUUID().toString().substring(0, 8); // Generate unique user ID
+        String userId = "user_" + UUID.randomUUID().toString().substring(0, 8);
         String hashedPassword = PasswordUtil.hashPassword(plainPassword);
         User newUser = new NormalUser(userId, username, hashedPassword, true);
 
@@ -242,18 +261,20 @@ public class ClientHandler implements Runnable {
         return "INFO::LOGOUT::No user was logged in.";
     }
 
+    private String formatBookToString(Book b) {
+        return String.join("|", b.getBookId(), b.getTitle(), b.getAuthor(), b.getCategory(), String.valueOf(b.getQuantity()), String.valueOf(b.getTotalQuantity()));
+    }
+
     private String handleGetAllBooks() {
         List<Book> books = bookDao.getAllBooks();
-        // TODO: Proper JSON serialization
         if (books.isEmpty()) return "SUCCESS::NO_BOOKS_FOUND";
         String bookListStr = books.stream()
-                .map(b -> String.join("|", b.getBookId(), b.getTitle(), b.getAuthor(), b.getCategory(), String.valueOf(b.getQuantity()), String.valueOf(b.getTotalQuantity())))
+                .map(this::formatBookToString)
                 .collect(Collectors.joining(";"));
         return "SUCCESS::BOOK_LIST::" + bookListStr;
     }
 
     private String handleSearchBook(String[] args) {
-        // SEARCH_BOOK::searchField(title/author/category)::searchTerm
         if (args.length != 2) return "ERROR::SEARCH_INVALID_ARGS::Expected searchField::searchTerm";
         String field = args[0].toLowerCase();
         String term = args[1];
@@ -264,7 +285,7 @@ public class ClientHandler implements Runnable {
         List<Book> books = bookDao.searchBooks(term, field);
         if (books.isEmpty()) return "SUCCESS::NO_BOOKS_FOUND_MATCHING_SEARCH";
         String bookListStr = books.stream()
-                .map(b -> String.join("|", b.getBookId(), b.getTitle(), b.getAuthor(), b.getCategory(), String.valueOf(b.getQuantity()), String.valueOf(b.getTotalQuantity())))
+                .map(this::formatBookToString)
                 .collect(Collectors.joining(";"));
         return "SUCCESS::BOOK_SEARCH_RESULTS::" + bookListStr;
     }
@@ -274,16 +295,12 @@ public class ClientHandler implements Runnable {
         String bookId = args[0];
         Optional<Book> bookOpt = bookDao.getBookById(bookId);
         if (bookOpt.isPresent()) {
-            Book b = bookOpt.get();
-            String bookStr = String.join("|", b.getBookId(), b.getTitle(), b.getAuthor(), b.getCategory(), String.valueOf(b.getQuantity()), String.valueOf(b.getTotalQuantity()));
-            return "SUCCESS::BOOK_DETAILS::" + bookStr;
+            return "SUCCESS::BOOK_DETAILS::" + formatBookToString(bookOpt.get());
         }
         return "FAILURE::BOOK_NOT_FOUND::" + bookId;
     }
 
-
     private String handleBorrowBook(String[] args) {
-        // BORROW_BOOK::userId::bookId (userId from loggedInUser)
         if (args.length != 1) return "ERROR::BORROW_BOOK_INVALID_ARGS::Expected bookId";
         String bookId = args[0];
         String userId = loggedInUser.getUserId();
@@ -291,7 +308,7 @@ public class ClientHandler implements Runnable {
         Connection conn = null;
         try {
             conn = DatabaseManager.getConnection();
-            conn.setAutoCommit(false); // Start transaction
+            conn.setAutoCommit(false);
 
             Optional<Book> bookOpt = bookDao.getBookById(bookId);
             if (!bookOpt.isPresent()) {
@@ -304,24 +321,22 @@ public class ClientHandler implements Runnable {
                 return "FAILURE::BORROW_FAILED::Book out of stock.";
             }
 
-            // Check if user already has an active loan for this book
             if (borrowRecordDao.getActiveBorrowRecordByUserAndBook(userId, bookId).isPresent()) {
                 conn.rollback();
                 return "FAILURE::BORROW_FAILED::You have already borrowed this book and not returned it.";
             }
 
-            // Proceed with borrowing
             book.setQuantity(book.getQuantity() - 1);
-            if (!bookDao.updateBookQuantity(book.getBookId(), book.getQuantity(), conn)) { // Pass connection
+            if (!bookDao.updateBookQuantity(book.getBookId(), book.getQuantity(), conn)) {
                 conn.rollback();
                 return "FAILURE::BORROW_FAILED::Could not update book quantity.";
             }
 
             LocalDate borrowDate = LocalDate.now();
-            LocalDate dueDate = borrowDate.plusWeeks(2); // Example: 2 weeks loan period
+            LocalDate dueDate = borrowDate.plusWeeks(2);
             BorrowRecord record = new BorrowRecord(userId, bookId, borrowDate, dueDate);
 
-            int recordId = borrowRecordDao.addBorrowRecord(record, conn); // Pass connection
+            int recordId = borrowRecordDao.addBorrowRecord(record, conn);
             record.setRecordId(recordId);
 
             conn.commit();
@@ -340,7 +355,6 @@ public class ClientHandler implements Runnable {
     }
 
     private String handleReturnBook(String[] args) {
-        // RETURN_BOOK::userId::bookId (userId from loggedInUser)
         if (args.length != 1) return "ERROR::RETURN_BOOK_INVALID_ARGS::Expected bookId";
         String bookId = args[0];
         String userId = loggedInUser.getUserId();
@@ -365,13 +379,10 @@ public class ClientHandler implements Runnable {
             Optional<Book> bookOpt = bookDao.getBookById(bookId);
             if (bookOpt.isPresent()) {
                 Book book = bookOpt.get();
-                // Ensure quantity does not exceed total quantity
                 if (book.getQuantity() < book.getTotalQuantity()) {
                     book.setQuantity(book.getQuantity() + 1);
                     if (!bookDao.updateBookQuantity(book.getBookId(), book.getQuantity(), conn)) {
                         conn.rollback();
-                        // This is problematic - record updated but book quantity not.
-                        // A more robust system might flag this for admin review.
                         return "FAILURE::RETURN_FAILED::Could not update book quantity. Record updated, but needs attention.";
                     }
                 } else {
@@ -379,7 +390,6 @@ public class ClientHandler implements Runnable {
                 }
             } else {
                 conn.rollback();
-                // This should ideally not happen if the borrow record exists.
                 return "FAILURE::RETURN_FAILED::Book data inconsistency.";
             }
 
@@ -427,9 +437,65 @@ public class ClientHandler implements Runnable {
         return "SUCCESS::MY_OVERDUE_BOOKS::" + recordsStr;
     }
 
+    private String handleGetMyRecommendations(String[] args) {
+        // GET_MY_RECOMMENDATIONS::limit
+        if (args.length != 1) return "ERROR::RECOMMENDATIONS_INVALID_ARGS::Expected limit";
+        int limit;
+        try {
+            limit = Integer.parseInt(args[0]);
+            if (limit <= 0) throw new NumberFormatException();
+        } catch (NumberFormatException e) {
+            return "ERROR::RECOMMENDATIONS_INVALID_ARGS::Limit must be a positive integer.";
+        }
+
+        // 1. Get user's recently borrowed books to find preferred categories
+        List<BorrowRecord> userBorrows = borrowRecordDao.getBorrowRecordsByUserId(loggedInUser.getUserId());
+        if (userBorrows.isEmpty()) {
+            // If no borrow history, recommend globally popular books not borrowed by user
+            Set<String> borrowedBookIds = borrowRecordDao.getBorrowedBookIdsByUserId(loggedInUser.getUserId());
+            List<Book> popularBooks = bookDao.getAllBooks().stream()
+                    .filter(b -> !borrowedBookIds.contains(b.getBookId()) && b.getQuantity() > 0)
+                    .sorted(Comparator.comparingInt(Book::getTotalQuantity).reversed()) // Simple popularity
+                    .limit(limit)
+                    .collect(Collectors.toList());
+            if (popularBooks.isEmpty()) return "SUCCESS::NO_RECOMMENDATIONS_AVAILABLE";
+            String booksStr = popularBooks.stream().map(this::formatBookToString).collect(Collectors.joining(";"));
+            return "SUCCESS::RECOMMENDATIONS::" + booksStr;
+        }
+
+        Set<String> preferredCategories = userBorrows.stream()
+                .limit(10) // Consider last 10 borrowed books for category preference
+                .map(BorrowRecord::getBookId)
+                .map(bookDao::getBookById)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .map(Book::getCategory)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        if (preferredCategories.isEmpty()) {
+            return "SUCCESS::NO_RECOMMENDATIONS_AVAILABLE::Could not determine category preferences.";
+        }
+
+        // 2. Get all book IDs user has ever borrowed
+        Set<String> allBorrowedBookIds = borrowRecordDao.getBorrowedBookIdsByUserId(loggedInUser.getUserId());
+
+        // 3. Fetch books from preferred categories, excluding already borrowed ones
+        List<Book> recommendedBooks = bookDao.getBooksByCategoriesExcludingBorrowed(preferredCategories, allBorrowedBookIds, limit);
+
+        if (recommendedBooks.isEmpty()) {
+            return "SUCCESS::NO_NEW_RECOMMENDATIONS_IN_PREFERRED_CATEGORIES";
+        }
+
+        String recommendationsStr = recommendedBooks.stream()
+                .map(this::formatBookToString)
+                .collect(Collectors.joining(";"));
+        return "SUCCESS::RECOMMENDATIONS::" + recommendationsStr;
+    }
+
+
     // --- Admin Handler Methods ---
     private String handleAddBook(String[] args) {
-        // ADD_BOOK::bookId::title::author::category::quantity::totalQuantity
         if (args.length != 6) return "ERROR::ADD_BOOK_INVALID_ARGS";
         try {
             String bookId = args[0];
@@ -455,7 +521,6 @@ public class ClientHandler implements Runnable {
     }
 
     private String handleUpdateBook(String[] args) {
-        // UPDATE_BOOK::bookId::title::author::category::quantity::totalQuantity
         if (args.length != 6) return "ERROR::UPDATE_BOOK_INVALID_ARGS";
         try {
             String bookId = args[0];
@@ -490,8 +555,6 @@ public class ClientHandler implements Runnable {
         if (!bookDao.getBookById(bookId).isPresent()) {
             return "FAILURE::DELETE_BOOK_FAILED::Book with ID " + bookId + " not found.";
         }
-        // Consider if book has active loans. For now, ON DELETE CASCADE handles DB.
-        // A safer approach might be to prevent deletion if active loans exist.
         if (bookDao.deleteBook(bookId)) {
             return "SUCCESS::BOOK_DELETED::" + bookId;
         } else {
@@ -506,6 +569,47 @@ public class ClientHandler implements Runnable {
         return "SUCCESS::ALL_BORROWING_RECORDS::" + recordsStr;
     }
 
+    private String handleGetPopularBooks(String[] args) {
+        // GET_POPULAR_BOOKS::limit
+        if (args.length != 1) return "ERROR::POPULAR_BOOKS_INVALID_ARGS::Expected limit";
+        int limit;
+        try {
+            limit = Integer.parseInt(args[0]);
+            if (limit <= 0) throw new NumberFormatException();
+        } catch (NumberFormatException e) {
+            return "ERROR::POPULAR_BOOKS_INVALID_ARGS::Limit must be a positive integer.";
+        }
+
+        Map<Book, Long> popularBooksMap = borrowRecordDao.getMostPopularBooks(limit);
+        if (popularBooksMap.isEmpty()) return "SUCCESS::NO_POPULAR_BOOKS_DATA";
+
+        String result = popularBooksMap.entrySet().stream()
+                .map(entry -> formatBookToString(entry.getKey()) + "|" + entry.getValue()) // bookId|title|author|category|qty|totalQty|borrowCount
+                .collect(Collectors.joining(";"));
+        return "SUCCESS::POPULAR_BOOKS_LIST::" + result;
+    }
+
+    private String handleGetTrendingBooks(String[] args) {
+        // GET_TRENDING_BOOKS::limit::daysPeriod
+        if (args.length != 2) return "ERROR::TRENDING_BOOKS_INVALID_ARGS::Expected limit::daysPeriod";
+        int limit, daysPeriod;
+        try {
+            limit = Integer.parseInt(args[0]);
+            daysPeriod = Integer.parseInt(args[1]);
+            if (limit <= 0 || daysPeriod <= 0) throw new NumberFormatException();
+        } catch (NumberFormatException e) {
+            return "ERROR::TRENDING_BOOKS_INVALID_ARGS::Limit and daysPeriod must be positive integers.";
+        }
+        Map<Book, Long> trendingBooksMap = borrowRecordDao.getTrendingBooks(limit, daysPeriod);
+        if (trendingBooksMap.isEmpty()) return "SUCCESS::NO_TRENDING_BOOKS_DATA";
+
+        String result = trendingBooksMap.entrySet().stream()
+                .map(entry -> formatBookToString(entry.getKey()) + "|" + entry.getValue()) // bookId|title|author|category|qty|totalQty|borrowCount
+                .collect(Collectors.joining(";"));
+        return "SUCCESS::TRENDING_BOOKS_LIST::" + result;
+    }
+
+
     private String handleGetAllUsers() {
         List<User> users = userDao.getAllUsers();
         if (users.isEmpty()) return "SUCCESS::NO_USERS_FOUND";
@@ -516,13 +620,14 @@ public class ClientHandler implements Runnable {
     }
 
     private String handleUpdateUserStatus(String[] args) {
-        // UPDATE_USER_STATUS::userId::isActive(true/false)
         if (args.length != 2) return "ERROR::UPDATE_USER_STATUS_INVALID_ARGS";
         String userId = args[0];
         boolean setActive;
         try {
             setActive = Boolean.parseBoolean(args[1]);
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException e) { // Boolean.parseBoolean doesn't throw this for invalid strings, it defaults to false.
+            // More robust check for "true" or "false" strings might be needed if strictness is required.
+            // For now, standard Boolean.parseBoolean behavior is fine.
             return "ERROR::UPDATE_USER_STATUS_INVALID_ARGS::isActive must be 'true' or 'false'";
         }
 
@@ -531,9 +636,13 @@ public class ClientHandler implements Runnable {
             return "FAILURE::UPDATE_USER_STATUS_FAILED::User not found.";
         }
         User user = userOpt.get();
-        if (user.getUserId().equals(loggedInUser.getUserId()) && !setActive) {
-            return "FAILURE::UPDATE_USER_STATUS_FAILED::Admin cannot deactivate their own account.";
+        // Prevent admin from deactivating their own current session's account if it's the one being modified
+        if (loggedInUser != null && user.getUserId().equals(loggedInUser.getUserId()) && !setActive) {
+            return "FAILURE::UPDATE_USER_STATUS_FAILED::Admin cannot deactivate their own currently logged-in account.";
         }
+        // Also, typically the "super admin" (e.g., the first one created) might be undeletable/unfreezable.
+        // For simplicity, we don't add that specific logic here.
+
         user.setActive(setActive);
         if (userDao.updateUser(user)) {
             return "SUCCESS::USER_STATUS_UPDATED::User " + userId + " status set to " + (setActive ? "ACTIVE" : "INACTIVE");

@@ -7,6 +7,8 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 public class BookDao {
 
@@ -80,11 +82,7 @@ public class BookDao {
         }
     }
 
-    // Special method to update quantity, could be used for thread-safe operations
-    // by making this method synchronized if needed, or better, use transactions
-    // For now, a direct update. Transactions will be handled at service/handler level.
     public boolean updateBookQuantity(String bookId, int newQuantity, Connection conn) throws SQLException {
-        // This method assumes conn is part of an existing transaction if needed
         String sql = "UPDATE books SET quantity = ? WHERE book_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, newQuantity);
@@ -93,7 +91,6 @@ public class BookDao {
             return affectedRows > 0;
         }
     }
-
 
     public boolean deleteBook(String bookId) {
         String sql = "DELETE FROM books WHERE book_id = ?";
@@ -110,12 +107,11 @@ public class BookDao {
 
     public List<Book> searchBooks(String searchTerm, String searchField) {
         List<Book> books = new ArrayList<>();
-        // Basic protection against SQL injection for searchField, though prepared statements handle searchTerm
         if (!searchField.matches("title|author|category")) {
             System.err.println("Invalid search field: " + searchField);
             return books;
         }
-        String sql = "SELECT * FROM books WHERE " + searchField + " LIKE ?";
+        String sql = "SELECT * FROM books WHERE " + searchField + " LIKE ? AND quantity > 0"; // Only show available books in search
         try (Connection conn = DatabaseManager.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, "%" + searchTerm + "%");
@@ -127,6 +123,56 @@ public class BookDao {
             System.err.println("Error searching books: " + e.getMessage());
         }
         return books;
+    }
+
+    public List<Book> getBooksByCategoriesExcludingBorrowed(Set<String> categories, Set<String> borrowedBookIds, int limit) {
+        List<Book> recommendedBooks = new ArrayList<>();
+        if (categories.isEmpty()) {
+            return recommendedBooks;
+        }
+
+        // Constructing the IN clause for categories
+        String categoryPlaceholders = categories.stream().map(c -> "?").collect(Collectors.joining(", "));
+
+        // Constructing the NOT IN clause for borrowedBookIds, if any
+        String borrowedExclusionSql = "";
+        if (!borrowedBookIds.isEmpty()) {
+            String borrowedPlaceholders = borrowedBookIds.stream().map(id -> "?").collect(Collectors.joining(", "));
+            borrowedExclusionSql = " AND b.book_id NOT IN (" + borrowedPlaceholders + ")";
+        }
+
+        // Fetch books from specified categories, not borrowed, with available quantity, ordered by some popularity metric (e.g., total_quantity or later by borrow count)
+        // For simplicity now, order by title, limit
+        // A more advanced recommendation would join with borrow_records to get borrow counts for popularity.
+        String sql = "SELECT b.* FROM books b " +
+                "WHERE b.category IN (" + categoryPlaceholders + ")" +
+                borrowedExclusionSql +
+                " AND b.quantity > 0 " +
+                "ORDER BY b.total_quantity DESC, b.title " + // Prioritize books with more total copies, then by title
+                "LIMIT ?";
+
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            int paramIndex = 1;
+            for (String category : categories) {
+                pstmt.setString(paramIndex++, category);
+            }
+            if (!borrowedBookIds.isEmpty()) {
+                for (String bookId : borrowedBookIds) {
+                    pstmt.setString(paramIndex++, bookId);
+                }
+            }
+            pstmt.setInt(paramIndex, limit);
+
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) {
+                recommendedBooks.add(mapRowToBook(rs));
+            }
+        } catch (SQLException e) {
+            System.err.println("Error fetching recommended books: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return recommendedBooks;
     }
 
 

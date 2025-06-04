@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.text.Font?>
+
+<BorderPane xmlns="http://javafx.com/javafx/11.0.2" xmlns:fx="http://javafx.com/fxml/1" fx:controller="org.example.client.controller.UserDashboardController">
+    <top>
+        <HBox alignment="CENTER_LEFT" spacing="10" style="-fx-padding: 10; -fx-background-color: #f0f0f0;">
+            <Label fx:id="welcomeLabel" text="Welcome, User!" >
+                <font><Font size="16.0" /></font>
+            </Label>
+            <Region HBox.hgrow="ALWAYS" />
+            <Button text="Logout" onAction="#handleLogout" />
+        </HBox>
+    </top>
+    <center>
+        <TabPane fx:id="userTabPane" tabClosingPolicy="UNAVAILABLE">
+            <Tab text="Search and Borrow Books">
+                <VBox spacing="10" style="-fx-padding: 10;">
+                    <HBox spacing="10" alignment="CENTER_LEFT">
+                        <Label text="Search:" />
+                        <ComboBox fx:id="searchFieldComboBox" promptText="Search by"/>
+                        <TextField fx:id="searchTermField" promptText="Enter search term" HBox.hgrow="ALWAYS"/>
+                        <Button text="Search" onAction="#handleSearchBooks"/>
+                        <Button text="Show All Books" onAction="#handleShowAllBooks"/>
+                    </HBox>
+                    <TableView fx:id="booksTableView" VBox.vgrow="ALWAYS">
+                        <columns>
+                            <TableColumn fx:id="bookIdCol" text="Book ID" />
+                            <TableColumn fx:id="bookTitleCol" text="Title" />
+                            <TableColumn fx:id="bookAuthorCol" text="Author" />
+                            <TableColumn fx:id="bookCategoryCol" text="Category" />
+                            <TableColumn fx:id="bookAvailableCol" text="Available" />
+                        </columns>
+                        <columnResizePolicy><TableView fx:constant="CONSTRAINED_RESIZE_POLICY"/></columnResizePolicy>
+                    </TableView>
+                    <HBox spacing="10" alignment="CENTER_RIGHT">
+                        <Button text="Borrow Selected Book" onAction="#handleBorrowBook"/>
+                    </HBox>
+                </VBox>
+            </Tab>
+            <Tab text="My Borrowing Records">
+                <VBox spacing="10" style="-fx-padding: 10;">
+                    <TableView fx:id="myBorrowsTableView" VBox.vgrow="ALWAYS">
+                        <columns>
+                            <TableColumn fx:id="borrowRecordIdCol" text="Record ID" />
+                            <TableColumn fx:id="borrowBookIdCol" text="Book ID" />
+                            <TableColumn fx:id="borrowDateCol" text="Borrowed On" />
+                            <TableColumn fx:id="dueDateCol" text="Due Date" />
+                            <TableColumn fx:id="returnDateCol" text="Returned On" />
+                            <TableColumn fx:id="borrowStatusCol" text="Status" />
+                        </columns>
+                        <columnResizePolicy><TableView fx:constant="CONSTRAINED_RESIZE_POLICY"/></columnResizePolicy>
+                    </TableView>
+                    <HBox spacing="10" alignment="CENTER_RIGHT">
+                        <Button text="Return Selected Book" onAction="#handleReturnBook"/>
+                        <Button text="Refresh Records" onAction="#handleRefreshMyBorrows"/>
+                    </HBox>
+                </VBox>
+            </Tab>
+            <Tab text="Recommendations">
+                <VBox spacing="10" style="-fx-padding: 10;">
+                    <HBox alignment="CENTER_LEFT" spacing="5">
+                        <Label text="Number of recommendations:"/>
+                        <Spinner fx:id="recommendationsCountSpinner" min="1" max="10" initialValue="5" editable="true" prefWidth="70"/>
+                        <Button text="Get Recommendations" onAction="#handleGetRecommendations"/>
+                    </HBox>
+                    <ListView fx:id="recommendationsListView" VBox.vgrow="ALWAYS"/>
+                    <Label fx:id="overdueLabel" textFill="red" style="-fx-font-weight: bold;"/>
+                </VBox>
+            </Tab>
+        </TabPane>
+    </center>
+</BorderPane>
