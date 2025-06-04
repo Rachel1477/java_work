@@ -1,0 +1,53 @@
+package org.example.util;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
+public class PasswordUtil {
+
+    public static String hashPassword(String password) {
+        if (password == null) {
+            return null;
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] encodedhash = digest.digest(password.getBytes(StandardCharsets.UTF_8));
+            return bytesToHex(encodedhash);
+        } catch (NoSuchAlgorithmException e) {
+            // This should not happen with SHA-256, but good to handle
+            throw new RuntimeException("Failed to hash password", e);
+        }
+    }
+
+    public static boolean verifyPassword(String plainPassword, String hashedPassword) {
+        if (plainPassword == null || hashedPassword == null) {
+            return false;
+        }
+        String newHash = hashPassword(plainPassword);
+        return newHash.equals(hashedPassword);
+    }
+
+    private static String bytesToHex(byte[] hash) {
+        StringBuilder hexString = new StringBuilder(2 * hash.length);
+        for (byte b : hash) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+        return hexString.toString();
+    }
+
+    // Main method for testing the PasswordUtil
+    public static void main(String[] args) {
+        String pass = "admin123";
+        String hashed = hashPassword(pass);
+        System.out.println("Original: " + pass);
+        System.out.println("Hashed: " + hashed);
+        System.out.println("Verification (correct): " + verifyPassword(pass, hashed));
+        System.out.println("Verification (incorrect): " + verifyPassword("wrong", hashed));
+        System.out.println("Verification (admin123): " + verifyPassword("admin123", hashPassword("admin123"))); // test default admin
+    }
+}

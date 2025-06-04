@@ -1,8 +1,10 @@
 package org.example.model;
 
 public class Admin extends User {
-    public Admin(String userId, String username, String password) {
-        super(userId, username, password, Role.ADMIN);
+    public Admin(String userId, String username, String passwordHash) {
+        super(userId, username, passwordHash, Role.ADMIN, true); // Default to active
     }
-    // Admin specific methods can be added later if needed
+    public Admin(String userId, String username, String passwordHash, boolean isActive) {
+        super(userId, username, passwordHash, Role.ADMIN, isActive);
+    }
 }

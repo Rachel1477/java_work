@@ -2,17 +2,21 @@ package org.example.model;
 
 import java.util.Objects;
 
-public abstract class User {
-    private String userId; // Can be username or a generated ID
-    private String username;
-    private String password; // In a real app, hash this!
-    private Role role;
+import java.util.Objects;
 
-    public User(String userId, String username, String password, Role role) {
+public abstract class User {
+    private String userId;
+    private String username;
+    private String passwordHash; // Changed from password
+    private Role role;
+    private boolean isActive;
+
+    public User(String userId, String username, String passwordHash, Role role, boolean isActive) {
         this.userId = userId;
         this.username = username;
-        this.password = password;
+        this.passwordHash = passwordHash;
         this.role = role;
+        this.isActive = isActive;
     }
 
     // Getters
@@ -24,25 +28,32 @@ public abstract class User {
         return username;
     }
 
-    public String getPassword() {
-        return password;
+    public String getPasswordHash() {
+        return passwordHash;
     }
 
     public Role getRole() {
         return role;
     }
 
-    // Setters (selectively, e.g., password change)
-    public void setPassword(String password) {
-        this.password = password;
+    public boolean isActive() {
+        return isActive;
     }
 
+    // Setters
     public void setUsername(String username) {
         this.username = username;
     }
 
-    // It's often good practice to make userId immutable after creation
-    // public void setUserId(String userId) { this.userId = userId; }
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
+    public void setActive(boolean active) {
+        isActive = active;
+    }
+
+    // userId and role are typically less frequently changed post-creation.
 
     @Override
     public boolean equals(Object o) {
@@ -63,6 +74,7 @@ public abstract class User {
                 "userId='" + userId + '\'' +
                 ", username='" + username + '\'' +
                 ", role=" + role +
+                ", isActive=" + isActive +
                 '}';
     }
 }
